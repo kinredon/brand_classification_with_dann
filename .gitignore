@@ -1,0 +1,8 @@
+previous_data_list/*
+.idea
+checkpoint/*
+MNIST_data/*
+mnistm_data.pkl
+summary*/*
+tfrecords/*
+tfrecords_inception/*
