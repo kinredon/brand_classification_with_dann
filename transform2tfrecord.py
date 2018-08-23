@@ -10,8 +10,8 @@ import os.path
 from PIL import Image
 
 # 参数
-IMAGE_WIDTH = 224
-IMAGE_HEIGHT= 224
+IMAGE_WIDTH = 299
+IMAGE_HEIGHT= 299
 IMAGE_CHANEL = 3
 BATCH_SIZE = 32
 
@@ -208,17 +208,18 @@ if __name__ == '__main__':
     # test()
     # 参数设置
     train_file = 'source_list_train.txt'                    # 训练图片
-    # name = 'source_train'                                   # 生成train.tfrecords
-    # output_directory = './tfrecords_inception'
-    # # source_test_filename = './tfrecords/source_test.tfrecords'
-    # # source_test_images, source_test_labels = get_data(source_test_filename, batch_size=522)
-    # # print(source_test_labels[0])
-    # # disp_tfrecords(tfrecord_list_file=output_directory + "/" + name + ".tfrecords")
-    # # 生成源训练数据
-    # transform2tfrecord(train_file, name, output_directory)  # 转化函数
-    # # print(label)
-    #
-    # # 生成源测试数据
+    # train_file = 'target_list.txt'                    # 训练图片
+    name = 'source_train'                                   # 生成train.tfrecords
+    output_directory = './tfrecords_inception2'
+    # source_test_filename = './tfrecords/source_test.tfrecords'
+    # source_test_images, source_test_labels = get_data(source_test_filename, batch_size=522)
+    # print(source_test_labels[0])
+    # disp_tfrecords(tfrecord_list_file=output_directory + "/" + name + ".tfrecords")
+    # 生成源训练数据
+    transform2tfrecord(train_file, name, output_directory)  # 转化函数
+    # print(label)
+
+    # 生成源测试数据
     # train_file = 'source_list_test.txt'                     # 训练图片
     # name = 'source_test'                                    # 生成train.tfrecords
     # transform2tfrecord(train_file, name, output_directory)  # 转化函数

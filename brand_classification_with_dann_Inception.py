@@ -15,9 +15,27 @@ trunc_normal = lambda stddev: tf.truncated_normal_initializer(0.0, stddev)
 from flip_gradient import flip_gradient
 from utils import *
 
+# source data
+source_train_filename = './tfrecords_inception2/source_train.tfrecords'
+source_train_images , source_train_labels = get_data(source_train_filename, batch_size=2088)
+source_test_filename = './tfrecords_inception2/source_test.tfrecords'
+source_test_images , source_test_labels = get_data(source_test_filename, batch_size=522)
+
+# target data
+target_train_filename = './tfrecords_inception2/target_train.tfrecords'
+target_train_images , target_train_labels = get_data(target_train_filename, batch_size=1488)
+target_test_filename = './tfrecords_inception2/target_test.tfrecords'
+target_test_images , target_test_labels = get_data(target_test_filename, batch_size=372)
+
+# num_test = 240
+combined_test_imgs = np.vstack([source_test_images, target_test_images])
+combined_test_labels = np.vstack([source_test_labels, target_test_labels])
+combined_test_domain = np.vstack([np.tile([1., 0.], [522, 1]),
+        np.tile([0., 1.], [372, 1])])
 
 def print_activations(t):
     print(t.op.name, ' ', t.get_shape().as_list())
+
 
 
 def inception_v3_base(inputs, scope=None):
@@ -274,9 +292,11 @@ def inception_v3_label_prediction(inputs,
                             is_training=is_training):
             # Final pooling and prediction
             with tf.variable_scope('Logits'):
+                print_activations(inputs)
                 # 1 x 1 x 2048
                 net = slim.dropout(inputs, keep_prob=dropout_keep_prob, scope='Dropout_1b')
                 # 2048
+                print_activations(net)
                 net = slim.conv2d(net, 100, [1, 1], activation_fn=None,
                                   normalizer_fn=None, scope='Conv2d_1c_1x1')
                 logits = slim.conv2d(net, num_classes, [1, 1], activation_fn=None,
@@ -285,23 +305,7 @@ def inception_v3_label_prediction(inputs,
                     logits = tf.squeeze(logits, [1, 2], name='SpatialSqueeze')
                     # 8
     return logits
-# source data
-source_train_filename = './tfrecords_inception/source_train.tfrecords'
-source_train_images , source_train_labels = get_data(source_train_filename, batch_size=2088)
-source_test_filename = './tfrecords_inception/source_test.tfrecords'
-source_test_images , source_test_labels = get_data(source_test_filename, batch_size=522)
 
-# target data
-target_train_filename = './tfrecords_inception/target_train.tfrecords'
-target_train_images , target_train_labels = get_data(target_train_filename, batch_size=1488)
-target_test_filename = './tfrecords_inception/target_test.tfrecords'
-target_test_images , target_test_labels = get_data(target_test_filename, batch_size=372)
-
-# num_test = 240
-combined_test_imgs = np.vstack([source_test_images, target_test_images])
-combined_test_labels = np.vstack([source_test_labels, target_test_labels])
-combined_test_domain = np.vstack([np.tile([1., 0.], [522, 1]),
-        np.tile([0., 1.], [372, 1])])
 
 
 batch_size = 64
@@ -313,8 +317,8 @@ class Model(object):
         self._build_model(keep_prob)
 
     def _build_model(self, keep_prob):
-        self.X = tf.placeholder(tf.float32, [None, 224, 224, 3])  # 输入
-        self.y = tf.placeholder(tf.float32, [None, 12])  # 标签
+        self.X = tf.placeholder(tf.float32, [None, 299, 299, 3])  # 输入
+        self.y = tf.placeholder(tf.float32, [None, 8])  # 标签
         self.domain = tf.placeholder(tf.float32, [None, 2])  # 域标签
         self.l = tf.placeholder(tf.float32, [])  # 反转
         self.train = tf.placeholder(tf.bool, [])  #
@@ -323,17 +327,17 @@ class Model(object):
         with tf.variable_scope('feature_extractor'):
             net = inception_v3_feature_extractor(self.X, 8)
 
-
         # The domain-invariant feature
         self.feature = net
         # The domain-invariant feature
-
+        print_activations(self.feature)
         with tf.variable_scope('label_predictor'):
             # Switches to route target examples (second half of batch) differently
             # depending on train or test mode.
             all_features = lambda: self.feature
-            source_features = lambda: tf.slice(self.feature, [0, 0], [batch_size // 2, -1])  # back_size的一半
+            source_features = lambda: tf.slice(self.feature, [0, 0, 0, 0], [batch_size // 2, 1, 1, -1])  # back_size的一半
             classify_feats = tf.cond(self.train, source_features, all_features)  # 如果train=true，返回source_features
+            print_activations(classify_feats)
 
             all_labels = lambda: self.y
             source_labels = lambda: tf.slice(self.y, [0, 0], [batch_size // 2, -1])
@@ -346,7 +350,7 @@ class Model(object):
 
         # Small MLP for domain prediction with adversarial loss
         with tf.variable_scope('domain_predictor'):
-            self.feature = tf.squeeze(logits, [1, 2], name='SpatialSqueeze')
+            self.feature = tf.squeeze(self.feature, [1, 2], name='SpatialSqueeze')
             # Flip the gradient when backpropagating through this operation
             feat = flip_gradient(self.feature, self.l)
 
@@ -395,7 +399,7 @@ with graph.as_default():
     merged = tf.summary.merge_all()
 
 
-def train_and_evaluate(training_mode, graph, model, num_steps=3000, verbose=False):
+def train_and_evaluate(training_mode, graph, model, num_steps=8600, verbose=False):
     """Helper to run the model with different training modes."""
 
     with tf.Session(graph=graph) as sess:
@@ -441,8 +445,8 @@ def train_and_evaluate(training_mode, graph, model, num_steps=3000, verbose=Fals
                 X = np.vstack([X0, X1])
                 y = np.vstack([y0, y1])
                 start_time = time.time()
-                summary, _, batch_loss, dloss, ploss, d_acc, p_acc = sess.run(
-                    [merged, dann_train_op, total_loss, domain_loss, pred_loss, domain_acc, label_acc],
+                _, batch_loss, dloss, ploss, d_acc, p_acc = sess.run(
+                    [dann_train_op, total_loss, domain_loss, pred_loss, domain_acc, label_acc],
                     feed_dict={model.X: X, model.y: y, model.domain: domain_labels,
                                model.train: True, model.l: l, learning_rate: lr})
                 duration = time.time() - start_time
@@ -451,21 +455,17 @@ def train_and_evaluate(training_mode, graph, model, num_steps=3000, verbose=Fals
                 # if verbose:
                     print('step {}, loss: {}  d_acc: {}  p_acc: {}  p: {}  l: {}  lr: {} duration: {}'.format(
                         i, batch_loss, d_acc, p_acc, p, l, lr, duration))
-                    train_writer.add_summary(summary, i)
-                if verbose and i % 100 == 0:
                     source_test_images_part, source_test_labels_part = next(gen_source_test)
                     target_test_images_part, target_test_labels_part = next(gen_target_test)
                     X1, y1 = next(gen_target_batch)
-                    summary, source_acc = sess.run([merged, label_acc],
+                    source_acc = sess.run([label_acc],
                                           feed_dict={model.X: source_test_images_part, model.y: source_test_labels_part,
-                                                     model.domain: combined_test_domain[0:522],model.train: False})
-                    test_source_writer.add_summary(summary, i)
+                                                     model.train: False})
 
-                    summary, target_acc = sess.run([merged, label_acc],
+                    target_acc = sess.run([label_acc],
                                           feed_dict={model.X: target_test_images_part, model.y: target_test_labels_part,
-                                                     model.domain: combined_test_domain[522:894], model.train: False})
+                                                     model.train: False})
                     print("source_acc:{}\t target_acc:{}".format(source_acc, target_acc))
-                    test_target_writer.add_summary(summary, i)
 
 
             elif training_mode == 'source':
@@ -473,7 +473,7 @@ def train_and_evaluate(training_mode, graph, model, num_steps=3000, verbose=Fals
                 X, y = next(gen_source_only_batch)
                 start_time = time.time()
                 summary, _, batch_loss, p_acc = sess.run([merged, regular_train_op, pred_loss, label_acc],
-                                         feed_dict={model.X: X, model.y: y, model.train: False,
+                                         feed_dict={model.X: X, model.y: y, model.domain: domain_labels, model.train: False,
                                                     model.l: l, learning_rate: lr})
                 duration = time.time() - start_time
                 if verbose and i % 10 == 0:
@@ -481,22 +481,18 @@ def train_and_evaluate(training_mode, graph, model, num_steps=3000, verbose=Fals
                     print('step {}, loss: {}  p_acc: {}  p: {}  l: {}  lr: {} duration:{}'.format(
                         i, batch_loss, p_acc, p, l, lr, duration))
                     train_writer.add_summary(summary, i)
-                if verbose and i % 100 == 0:
+
                     source_test_images_part, source_test_labels_part = next(gen_source_test)
                     target_test_images_part, target_test_labels_part = next(gen_target_test)
                     X1, y1 = next(gen_target_batch)
                     summary, source_acc = sess.run([merged, label_acc],
-                                                   feed_dict={model.X: source_test_images_part,
-                                                              model.y: source_test_labels_part,
-                                                              model.domain: combined_test_domain[0:522],
-                                                              model.train: False})
+                                          feed_dict={model.X: source_test_images_part, model.y: source_test_labels_part,
+                                                     model.domain: combined_test_domain[0:64], model.train: False})
                     test_source_writer.add_summary(summary, i)
 
                     summary, target_acc = sess.run([merged, label_acc],
-                                                   feed_dict={model.X: target_test_images_part,
-                                                              model.y: target_test_labels_part,
-                                                              model.domain: combined_test_domain[522:894],
-                                                              model.train: False})
+                                          feed_dict={model.X: target_test_images_part, model.y: target_test_labels_part,
+                                                     model.domain: combined_test_domain[0:64], model.train: False})
                     print("source_acc:{}\t target_acc:{}".format(source_acc, target_acc))
                     test_target_writer.add_summary(summary, i)
 
@@ -507,36 +503,49 @@ def train_and_evaluate(training_mode, graph, model, num_steps=3000, verbose=Fals
                                          feed_dict={model.X: X, model.y: y, model.train: False,
                                                     model.l: l, learning_rate: lr})
 
+        gen_source_test = batch_generator(
+            [source_test_images, source_test_labels], batch_size, shuffle=False)
+        gen_target_test = batch_generator(
+            [target_test_images, target_test_labels], batch_size, shuffle=False)
+        source_test_images_part, source_test_labels_part = next(gen_source_test)
+        target_test_images_part, target_test_labels_part = next(gen_target_test)
         # Compute final evaluation on test data
-        source_acc = sess.run(label_acc,
-                              feed_dict={model.X: source_test_images, model.y: source_test_labels,
+        batch_count = int(522 / batch_size)
+        source_acc = 0
+        for i in range(batch_count):
+            source_acc += sess.run(label_acc,
+                            feed_dict={model.X: source_test_images_part, model.y: source_test_labels_part,
                                          model.train: False})
+        source_acc /= batch_count
 
-        target_acc = sess.run(label_acc,
-                              feed_dict={model.X: target_test_images, model.y: target_test_labels,
-                                         model.train: False})
+        batch_count = int(372 / batch_size)
+        target_acc = 0
+        for i in range(batch_count):
+            target_acc += sess.run(label_acc,
+                                  feed_dict={model.X: target_test_images_part, model.y: target_test_labels_part,
+                                             model.train: False})
+        target_acc /= batch_count
 
         test_domain_acc = sess.run(domain_acc,
-                                   feed_dict={model.X: combined_test_imgs,
-                                              model.domain: combined_test_domain, model.l: 1.0})
+                                   feed_dict={model.X: combined_test_imgs[0:200],
+                                              model.domain: combined_test_domain[0:200], model.l: 1.0})
 
-        test_emb = sess.run(model.feature, feed_dict={model.X: combined_test_imgs})
     train_writer.close()
     test_source_writer.close()
     test_target_writer.close()
-    return source_acc, target_acc, test_domain_acc, test_emb
+    return source_acc, target_acc, test_domain_acc
 
 
 if __name__ == "__main__":
 
     # print('\nDomain adaptation training')
-    # source_acc, target_acc, d_acc, dann_emb = train_and_evaluate('dann', graph, model, verbose=True)
+    # source_acc, target_acc, d_acc = train_and_evaluate('dann', graph, model, verbose=True)
     # print('Source accuracy:', source_acc)
     # print('Target accuracy:', target_acc)
     # print('Domain accuracy:', d_acc)
 
     print('\nSource only training')
-    source_acc, target_acc, _, source_only_emb = train_and_evaluate('source', graph, model, verbose=True)
+    source_acc, target_acc, _ = train_and_evaluate('source', graph, model, verbose=True)
     print('Source accuracy:', source_acc)
     print('Target accuracy:', target_acc)
 
